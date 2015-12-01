@@ -16,7 +16,7 @@ class Varnishpurge_PurgeTask extends BaseTask
     {
         $urls = $this->getSettings()->urls;
         $this->_locale = $this->getSettings()->locale;
-        
+
         $this->_urls = array();
         $this->_urls = array_chunk($urls, 20);
 
@@ -26,29 +26,44 @@ class Varnishpurge_PurgeTask extends BaseTask
     public function runStep($step)
     {
         VarnishpurgePlugin::log('Varnish purge task run step: ' . $step, LogLevel::Info, craft()->varnishpurge->getSetting('varnishLogAll'));
-        
-        $batch = \Guzzle\Batch\BatchBuilder::factory()
-          ->transferRequests(20)
-          ->bufferExceptions()
-          ->build();
 
-        $client = new \Guzzle\Http\Client();
-        $client->setDefaultOption('headers/Accept', '*/*');
+        $servers = craft()->varnishpurge->getSetting('varnishUrl');
 
-        foreach ($this->_urls[$step] as $url) {
-            VarnishpurgePlugin::log('Adding url to purge: ' . $url, LogLevel::Info, craft()->varnishpurge->getSetting('varnishLogAll'));
-
-            $request = $client->createRequest('PURGE', $url);
-            $batch->add($request);
+        if(!is_array($servers)) {
+          $servers = array($servers);
         }
 
-        $requests = $batch->flush();
+        foreach($servers as $server) {
 
-        foreach ($batch->getExceptions() as $e) {
-            VarnishpurgePlugin::log('An exception occurred: ' . $e->getMessage(), LogLevel::Error);
+          $batch = \Guzzle\Batch\BatchBuilder::factory()
+            ->transferRequests(20)
+            ->bufferExceptions()
+            ->build();
+
+          $client = new \Guzzle\Http\Client();
+          $client->setDefaultOption('headers/Accept', '*/*');
+
+          foreach ($this->_urls[$step] as $url) {
+
+              $urlComponents = parse_url($url);
+              $targetUrl = preg_replace('{/$}', '', $server) . $urlComponents['path'];
+
+              VarnishpurgePlugin::log('Adding url to purge: ' . $targetUrl . ' with Host: ' . $urlComponents['host'], LogLevel::Info, craft()->varnishpurge->getSetting('varnishLogAll'));
+
+              $request = $client->createRequest('PURGE', $targetUrl);
+              $request->addHeader('Host', $urlComponents['host']);
+
+              $batch->add($request);
+          }
+
+          $requests = $batch->flush();
+
+          foreach ($batch->getExceptions() as $e) {
+              VarnishpurgePlugin::log('An exception occurred: ' . $e->getMessage(), LogLevel::Error);
+          }
+
+          $batch->clearExceptions();
         }
-
-        $batch->clearExceptions();
 
         return true;
     }
